@@ -1,0 +1,13 @@
+[package]
+name = "i3-mgr"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0.204", features = ["serde_derive"] }
+serde_json = "1.0.121"
+thiserror = "1.0.63"
+img2ascii = { path = "./image-to-ascii"}
+image = "0.25.2"
+ratatui = "0.28.0"
+tui = "0.19.0"
