@@ -3,7 +3,7 @@
 use std::process::ChildStderr;
 
 use crate::prelude::*;
-use crate::shutils::{cmd, pipe};
+use crate::shutils::{cmd, i3_cmd, pipe};
 use crate::workspace::Workspace;
 
 pub(crate) const WINDOW_PROPERTIES_SECTION: &str = r#"{name, id, type, "class": .window_properties.class, focused, output, sticky, floating, nodes, window, scratchpad_state}"#;
@@ -75,6 +75,14 @@ impl Window {
         let mut children: Vec<Window> = Vec::new();
         self.flatten_window(&mut children);
         children
+    }
+
+    pub(crate) fn focus_window(&self) -> Result<String> {
+        i3_cmd(&[&format!(r#"[con_id="{}"]"#, self.id), "focus"])
+    }
+
+    pub(crate) fn kill(&self) -> Result<String> {
+        i3_cmd(&[&format!(r#"[con_id="{}"]"#, self.id), "kill"])
     }
 
     fn flatten_window(&self, children: &mut Vec<Window>) {

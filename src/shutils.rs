@@ -16,6 +16,12 @@ pub(crate) fn cmd(args: &[&str]) -> proc::Command {
     cmd
 }
 
+pub(crate) fn i3_cmd(cmd_strings: &[&str]) -> Result<String> {
+    let mut cmds = vec!["i3-msg"];
+    cmds.extend(cmd_strings);
+    pipe(&mut [&mut cmd(cmds.as_slice())])
+}
+
 /// Create a chain of commands that are piped together and extract the std out.
 pub(crate) fn pipe(cmds: &mut [&mut proc::Command]) -> Result<String> {
     for i in 0..cmds.len() - 1 {
@@ -34,13 +40,10 @@ pub(crate) fn pipe(cmds: &mut [&mut proc::Command]) -> Result<String> {
 }
 
 pub(crate) fn move_window_to_workspace(window_id: u64, target_workspace: &str) -> Result<String> {
-    let mut command = cmd(&[
-        "i3-msg",
+    i3_cmd(&[
         &format!(r#"[con_id="{}"]"#, window_id),
         "move",
         "workspace",
         target_workspace,
-    ]);
-
-    pipe(&mut [&mut command])
+    ])
 }

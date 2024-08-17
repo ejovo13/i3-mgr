@@ -34,6 +34,7 @@ impl HomeLayoutSelectedWindow {
 }
 
 use crate::shutils;
+use crate::shutils::i3_cmd;
 use crate::shutils::pipe;
 
 #[derive(Debug, Clone)]
@@ -51,16 +52,18 @@ struct HomeLayout {
 
 impl HomeLayout {
     /// handle adding an element to one of our windows
-    fn handle_add(&mut self) -> Result<()> {
+    fn handle_add(&mut self, model: &mut Model) -> Result<()> {
         match self.selected {
-            HomeLayoutSelectedWindow::Workspaces => self.add_workspace()?,
+            HomeLayoutSelectedWindow::Workspaces => {
+                self.add_workspace(model)?;
+            }
             _ => (),
         }
 
         Ok(())
     }
 
-    fn handle_consolidate(&mut self, target_workspace: &str, model: &Model) -> Result<()> {
+    fn handle_consolidate(&mut self, target_workspace: &str, model: &mut Model) -> Result<()> {
         match self.selected {
             HomeLayoutSelectedWindow::Workspaces => {
                 self.consolidate_workspaces(target_workspace, model)?
@@ -72,7 +75,7 @@ impl HomeLayout {
     }
 
     /// Move all windows from all workspaces to a single workspace.
-    fn consolidate_workspaces(&mut self, target_workspace: &str, model: &Model) -> Result<()> {
+    fn consolidate_workspaces(&mut self, target_workspace: &str, model: &mut Model) -> Result<()> {
         // Create a command to move all windows over
         //
         //
@@ -82,7 +85,10 @@ impl HomeLayout {
             if workspace_name == target_workspace {
                 // Do nothing.
             } else {
-                let nodes = workspace_nodes.iter().flat_map(|window| window.flatten());
+                let nodes = workspace_nodes
+                    .iter()
+                    .flat_map(|window| window.flatten())
+                    .filter(|ws| ws.name.is_some());
                 for node in nodes {
                     shutils::move_window_to_workspace(node.id, target_workspace)?;
                 }
@@ -90,15 +96,28 @@ impl HomeLayout {
         }
 
         self.workspaces_index = 0;
+        model.refresh();
 
         Ok(())
     }
 
+    fn show_scratchpad(&self) -> Result<String> {
+        i3_cmd(&["scratchpad", "show"])
+    }
+
     /// Send a message to i3 to create a new message
-    fn add_workspace(&mut self) -> Result<()> {
-        let mut cmd = cmd(&["i3-msg", "workspace", &self.workspaces_index.to_string()]);
-        pipe(&mut [&mut cmd])?;
-        Ok(())
+    fn add_workspace(&mut self, model: &mut Model) -> Result<String> {
+        let _ = i3_cmd(&["workspace", &(self.workspaces_index + 1).to_string()])?;
+        model.refresh();
+        self.show_scratchpad()
+    }
+
+    fn decrement_attached_index(&mut self, n_windows: usize) {
+        if self.attached_windows_index as usize == 0 {
+            self.attached_windows_index = (n_windows - 1) as u64
+        } else {
+            self.attached_windows_index -= 1
+        }
     }
 
     fn decrement_workspace_index(&mut self, n_workspaces: usize) {
@@ -106,6 +125,14 @@ impl HomeLayout {
             self.workspaces_index = (n_workspaces - 1) as u64
         } else {
             self.workspaces_index -= 1
+        }
+    }
+
+    fn increment_attached_index(&mut self, n_windows: usize) {
+        if self.attached_windows_index as usize == n_windows - 1 {
+            self.attached_windows_index = 0
+        } else {
+            self.attached_windows_index += 1
         }
     }
 
@@ -118,16 +145,18 @@ impl HomeLayout {
         }
     }
 
-    fn move_down_inside(&mut self, n_workspaces: usize) {
+    fn move_down_inside(&mut self, n_workspaces: usize, n_windows: usize) {
         match self.selected {
             HomeLayoutSelectedWindow::Workspaces => self.increment_workspace_index(n_workspaces),
+            HomeLayoutSelectedWindow::Attached => self.increment_attached_index(n_windows),
             _ => (),
         }
     }
 
-    fn move_up_inside(&mut self, n_workspaces: usize) {
+    fn move_up_inside(&mut self, n_workspaces: usize, n_windows: usize) {
         match self.selected {
             HomeLayoutSelectedWindow::Workspaces => self.decrement_workspace_index(n_workspaces),
+            HomeLayoutSelectedWindow::Attached => self.decrement_attached_index(n_windows),
             _ => (),
         }
     }
@@ -242,13 +271,19 @@ impl HomeLayout {
 
         // Render Attached windows on the far right
         frame.render_stateful_widget(
-            List::new(model.floating_windows.iter().map(|ws| ws.name_str()))
-                .block(
-                    Block::bordered()
-                        .title("Floating Windows")
-                        .border_style(border_style),
-                )
-                .highlight_style(SELECTED_STYLE),
+            List::new(
+                model
+                    .floating_windows
+                    .iter()
+                    .filter(|ws| ws.name.is_some())
+                    .map(|ws| ws.name_str()),
+            )
+            .block(
+                Block::bordered()
+                    .title("Floating Windows")
+                    .border_style(border_style),
+            )
+            .highlight_style(SELECTED_STYLE),
             self.floating_windows,
             &mut windows_state,
         );
@@ -256,6 +291,7 @@ impl HomeLayout {
 
     fn render_attached(&self, frame: &mut Frame, model: &mut Model) -> Result<()> {
         let mut state = ListState::default();
+        state.select(Some(self.attached_windows_index as usize));
 
         let border_style = match self.selected {
             HomeLayoutSelectedWindow::Attached => Style::new().blue(),
@@ -338,6 +374,8 @@ pub(crate) enum Message {
     Consolidate,
     /// Focuse on a given window
     GoTo,
+    /// Delete a workspace or window
+    Delete,
 }
 
 enum AppScreen {
@@ -350,6 +388,7 @@ fn home_layout(
     frame: &Frame,
     selected: HomeLayoutSelectedWindow,
     workspace_index: u64,
+    attached_windows_index: u64,
 ) -> HomeLayout {
     let home_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -379,7 +418,7 @@ fn home_layout(
         status: home_layout[1],
         selected,
         workspaces_index: workspace_index,
-        attached_windows_index: 0,
+        attached_windows_index: attached_windows_index,
         workspace_state: None,
     }
 }
@@ -427,7 +466,12 @@ impl Model {
             status_timestamp: startup_time,
             startup_time,
             current_menu: AppLayout::HomeLayout,
-            home_layout: Some(home_layout(frame, HomeLayoutSelectedWindow::Workspaces, 0)),
+            home_layout: Some(home_layout(
+                frame,
+                HomeLayoutSelectedWindow::Workspaces,
+                0,
+                0,
+            )),
         }
     }
 
@@ -435,7 +479,17 @@ impl Model {
         let cloned_map = self.ws_map.clone();
         let nodes = cloned_map.get(workspace_name).unwrap();
 
-        Ok(nodes.iter().flat_map(|window| window.flatten()).collect())
+        Ok(nodes
+            .iter()
+            .flat_map(|window| window.flatten())
+            .filter(|ws| ws.name.is_some())
+            .collect())
+    }
+
+    /// Send a focus command to get back to this window
+    fn focus(&self) -> Result<String> {
+        let focused = self.fcsd_window.clone().unwrap();
+        i3_cmd(&[&format!(r#"[con_id="{}"]"#, focused.id), "focus"])
     }
 
     /// Retrieve all of the windows that belong to a given workspace
@@ -454,6 +508,21 @@ impl Model {
             .unwrap_or(&self.workspaces[0])
             .name
             .clone()
+    }
+
+    fn selected_attached_window(&self) -> Window {
+        let selected_ws = self.selected_workspace();
+        let nodes = self.workspace_windows(&selected_ws).unwrap();
+        nodes
+            .get(self.hl().attached_windows_index as usize)
+            .unwrap_or(&nodes[0])
+            .clone()
+    }
+
+    fn delete_attached_window(&mut self) -> Result<()> {
+        let selected_window = self.selected_attached_window();
+        selected_window.focus_window()?;
+        Ok(())
     }
 
     /// Update the display value of the update status string
@@ -485,7 +554,12 @@ impl Model {
         match self.current_menu {
             AppLayout::HomeLayout => match &self.home_layout {
                 Some(h_layout) => {
-                    let layout = home_layout(frame, h_layout.selected, h_layout.workspaces_index);
+                    let layout = home_layout(
+                        frame,
+                        h_layout.selected,
+                        h_layout.workspaces_index,
+                        h_layout.attached_windows_index,
+                    );
                     let _ = layout.render(frame, self);
                 }
                 None => (),
@@ -523,24 +597,58 @@ impl Model {
             KeyCode::Char('l') => Some(Message::MoveRight),
             KeyCode::Char('a') => Some(Message::Add),
             KeyCode::Char('c') => Some(Message::Consolidate),
+            KeyCode::Char('d') => Some(Message::Delete),
             KeyCode::Enter => Some(Message::GoTo),
             _ => None,
         }
     }
 
+    /// Delete a window or workspace
+    fn handle_delete(&mut self) -> Result<()> {
+        let hl = self.home_layout.clone().unwrap();
+        match hl.selected {
+            HomeLayoutSelectedWindow::Workspaces => {
+                // Jump to the selected workspace
+                //
+                ()
+            }
+            HomeLayoutSelectedWindow::Attached => {
+                let selected_window = self.selected_attached_window();
+                selected_window.kill()?;
+                self.refresh();
+                self.update_status(&format!("Killed: {:?}", selected_window));
+            }
+            _ => (),
+        }
+        Ok(())
+    }
+
     /// Jump to a specific window or workspace
-    fn handle_goto(&self) -> Result<()> {
+    fn handle_goto(&mut self) -> Result<()> {
         let hl = self.home_layout.clone().unwrap();
         match hl.selected {
             HomeLayoutSelectedWindow::Workspaces => {
                 // Jump to the selected workspace
                 let selected = self.selected_workspace();
-                pipe(&mut [&mut cmd(&["i3-msg", "workspace", &selected])])?;
+                shutils::i3_cmd(&["workspace", &selected])?;
+                hl.show_scratchpad()?;
+            }
+            HomeLayoutSelectedWindow::Attached => {
+                let selected_window = self.selected_attached_window();
+                selected_window.focus_window()?;
+                self.hl().show_scratchpad()?;
+                self.update_status(&format!("Focused: {:?}", selected_window));
             }
 
             _ => (),
         }
         Ok(())
+    }
+
+    fn n_attached_windows(&self) -> usize {
+        self.workspace_windows(&self.selected_workspace())
+            .unwrap()
+            .len()
     }
 
     /// Refresh the workspaces and windows that are being monitored.
@@ -595,15 +703,17 @@ impl Model {
             },
             Message::MoveUp => match self.current_menu {
                 AppLayout::HomeLayout => {
+                    let n_attached = self.n_attached_windows();
                     if let Some(layout) = &mut self.home_layout {
-                        layout.move_up_inside(self.workspaces.len());
+                        layout.move_up_inside(self.workspaces.len(), n_attached);
                     }
                 }
             },
             Message::MoveDown => match self.current_menu {
                 AppLayout::HomeLayout => {
+                    let n_attached = self.n_attached_windows();
                     if let Some(layout) = &mut self.home_layout {
-                        layout.move_down_inside(self.workspaces.len());
+                        layout.move_down_inside(self.workspaces.len(), n_attached);
                     }
                 }
             },
@@ -618,7 +728,10 @@ impl Model {
                 }
             },
             Message::Add => match self.current_menu {
-                AppLayout::HomeLayout => self.home_layout.as_mut().unwrap().handle_add().unwrap(),
+                AppLayout::HomeLayout => {
+                    let mut hl = self.home_layout.clone().unwrap();
+                    hl.handle_add(self).unwrap();
+                }
             },
             Message::Consolidate => match self.current_menu {
                 AppLayout::HomeLayout => {
@@ -630,7 +743,12 @@ impl Model {
             },
             Message::GoTo => match self.current_menu {
                 AppLayout::HomeLayout => {
-                    self.handle_goto();
+                    self.handle_goto().unwrap();
+                }
+            },
+            Message::Delete => match self.current_menu {
+                AppLayout::HomeLayout => {
+                    self.handle_delete().unwrap();
                 }
             },
             _ => (),
