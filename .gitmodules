@@ -1,0 +1,3 @@
+[submodule "image-to-ascii"]
+	path = image-to-ascii
+	url = git@github.com:ejovo13/image-to-ascii.git

@@ -17,3 +17,23 @@ The central idea in
 1. Model
 2. Handling updates
 3. Update
+
+## Installation
+
+After cloning the repository run
+
+```
+cargo install --path .
+```
+
+to have access to the `i3-mgr` binary.
+
+## Launching with i3
+
+We recommand opening up `i3-mgr` in a new window and then sending the shell to the scratchpad. We can accomplish that with
+the following bash script:
+
+```bash
+#!/usr/bin/bash
+i3-msg exec "terminator --command 'i3-msg move scratchpad && i3-msg scratchpad show && i3-mgr'"
+```
